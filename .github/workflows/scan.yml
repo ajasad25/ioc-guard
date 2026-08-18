@@ -27,26 +27,67 @@ jobs:
         with:
           python-version: '3.12'
 
+      # Every ${{ }} value is passed through env and used only as a quoted
+      # shell variable. Nothing is textually expanded into this script: a
+      # branch name may legally contain `id`, $(id), ; | and &, and an attacker
+      # who can push a branch is precisely this project's threat model.
       - name: Scan
         env:
           PYTHONPATH: ${{ github.workspace }}/.ioc-guard
+          BASE_REF: ${{ github.base_ref }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_BEFORE: ${{ github.event.before }}
+          WORKSPACE: ${{ github.workspace }}
+          RUNNER_TEMP: ${{ runner.temp }}
         run: |
-          set -euo pipefail
-          BASE_ARGS=""
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            git fetch --no-tags origin \
-              "+refs/heads/${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
-            BASE_ARGS="--base-ref origin/${{ github.base_ref }}"
-          fi
+          set -uo pipefail
+          # GitHub runs `run:` blocks as `bash -e {0}`. This step classifies
+          # the scanner's exit code itself, so -e must be off: under -e a
+          # findings result (1) would abort the step before rc is read.
           set +e
-          python3 -m ioc_guard \
-            --root "${{ github.workspace }}" \
-            --iocs "${{ github.workspace }}/.ioc-guard/iocs.txt" \
-            --json "${{ runner.temp }}/ioc-report.json" \
-            --summary "$GITHUB_STEP_SUMMARY" \
-            $BASE_ARGS
+
+          set -- --root "$WORKSPACE" \
+                 --iocs "$WORKSPACE/.ioc-guard/iocs.txt" \
+                 --json "$RUNNER_TEMP/ioc-report.json" \
+                 --summary "$GITHUB_STEP_SUMMARY"
+
+          case "${EVENT_NAME:-}" in
+            pull_request|pull_request_target)
+              if [ -n "${BASE_REF:-}" ]; then
+                if ! git fetch --no-tags origin \
+                       "+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"; then
+                  echo "::error::ioc-guard could not fetch the base branch. This is NOT a clean result."
+                  exit 2
+                fi
+                set -- "$@" --base-ref "origin/$BASE_REF"
+              fi
+              ;;
+            push)
+              # The worm force-pushes branch tips; it does not open pull
+              # requests. Without a base ref here the .gitignore and CRLF
+              # rules -- the two aimed at the incident's actual damage --
+              # would never run in production.
+              before=""
+              case "${EVENT_BEFORE:-}" in
+                "")      ;;                        # not a push payload
+                *[!0]*)  before="$EVENT_BEFORE" ;; # a real object id
+                *)       ;;                        # all zeros: new branch
+              esac
+              if [ -n "$before" ]; then
+                if git rev-parse --verify --quiet "$before^{commit}" >/dev/null; then
+                  set -- "$@" --base-ref "$before"
+                else
+                  echo "::warning::ioc-guard: base commit $before is not in this checkout" \
+                       "(history rewritten or shallow fetch); the diff rules were skipped for this push."
+                fi
+              fi
+              ;;
+          esac
+
+          echo "ioc-guard args: $*"
+          python3 -m ioc_guard "$@"
           rc=$?
-          set -e
+
           if [ "$rc" = "0" ]; then
             echo "ioc-guard: clean"
             exit 0
