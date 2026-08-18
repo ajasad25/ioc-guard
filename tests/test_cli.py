@@ -105,3 +105,14 @@ def test_quiet_suppresses_the_text_report(tmp_path):
     r = run(["--root", str(tmp_path), "--quiet"])
     assert r.returncode == 1
     assert r.stdout.strip() == ""
+
+
+def test_infected_fixture_is_detected():
+    r = run(["--root", str(REPO / "tests" / "fixtures" / "infected")])
+    assert r.returncode == 1
+    assert "A9-1800-1" in r.stdout
+
+
+def test_clean_fixture_passes():
+    r = run(["--root", str(REPO / "tests" / "fixtures" / "clean")])
+    assert r.returncode == 0, r.stdout
