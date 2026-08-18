@@ -12,6 +12,15 @@ MIN_PAD_SPACES = 300
 NUL = "\x00"
 
 _UNICODE_ESCAPE = re.compile(r"\\u00[0-9a-fA-F]{2}")
+# A line that is nothing but an SVG path attribute. Path data is drawn from a
+# 30-character alphabet with no quotes, parentheses, braces, semicolons,
+# backslashes or dollars, so no JavaScript can be expressed in it -- but a
+# single icon routinely runs past 4000 characters inside a React component,
+# which is a measured false positive of the length rule in two local repos.
+_SVG_PATH_LINE = re.compile(
+    r"""^\s*(?:<\s*path\s+)?d\s*=\s*(["'])"""
+    r"""[\sMmLlHhVvCcSsQqTtAaZz0-9.,+eE-]*"""
+    r"""\1\s*(?:/\s*>)?\s*,?\s*$""")
 _LONG_SPACE_RUN = re.compile(r" {%d,}" % MIN_PAD_SPACES)
 _CLOSING_BRACE = re.compile(r"\}\s*;")
 _CHILD_PROCESS = re.compile(r"child_process", re.IGNORECASE)
@@ -31,7 +40,7 @@ def run_heuristics(text: str, path: str) -> List[Finding]:
     lines = text.splitlines()
 
     for lineno, line in enumerate(lines, 1):
-        if dense and len(line) > MAX_LINE_LEN:
+        if dense and len(line) > MAX_LINE_LEN and not _SVG_PATH_LINE.match(line):
             findings.append(Finding(path=path, line=lineno,
                                     rule="heuristic:long-line",
                                     excerpt="line is %d chars: %s" % (len(line), _short(line))))

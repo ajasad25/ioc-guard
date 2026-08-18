@@ -35,6 +35,15 @@ NUL_WINDOW = 8192
 SOURCE_SUFFIXES = (".js", ".cjs", ".mjs", ".jsx", ".ts", ".tsx", ".mts", ".cts",
                    ".json", ".yml", ".yaml", ".md", ".sh", ".bash", ".zsh", ".py")
 
+# Generated bundles live here. I7 anchors these to the top level so that a
+# nested one is no longer a free hiding place -- but a bundle is still a bundle,
+# and it trips the length/density rules by construction. Measured on one local
+# checkout: scanning nested web/dist and server/dist produced 35 long-line hits
+# and zero true positives. So they are scanned for the literal indicators, which
+# is what closes the hiding place, and exempted from the density heuristics --
+# exactly the treatment I7 prescribes for *.min.js.
+BUILD_OUTPUT_DIRS = ("dist", "build", "coverage", ".next")
+
 # Data and markup formats where a >3000 char line or a run of escapes is
 # ordinary: SVG path data, generated HTML reports, prose, lockfiles, snapshots.
 # Measured across ten local checkouts, these were the entire false-positive
@@ -115,6 +124,11 @@ def is_source_like(relpath: str) -> bool:
     return base.endswith(SOURCE_SUFFIXES)
 
 
+def in_build_output(relpath: str) -> bool:
+    """True for a path under a build-output directory at any depth."""
+    return any(d in BUILD_OUTPUT_DIRS for d in _norm(relpath).split("/")[:-1])
+
+
 def allows_density_heuristics(relpath: str) -> bool:
     """True where a >3000 char line or dense \\u00XX escapes are abnormal.
 
@@ -123,6 +137,8 @@ def allows_density_heuristics(relpath: str) -> bool:
     lines into a permanently red required check, which is how a control gets
     muted. The literal indicator patterns stay unscoped -- they are precise.
     """
+    if in_build_output(relpath):
+        return False
     base = _basename(relpath).lower()
     if base.endswith(MINIFIED_SUFFIXES):
         return False

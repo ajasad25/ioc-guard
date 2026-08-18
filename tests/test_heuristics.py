@@ -134,3 +134,37 @@ def test_space_padding_is_not_scoped_away():
 def test_spawn_hidden_window_is_not_scoped_away():
     body = "const cp=require('child_process');\ncp.spawn(x,y,{windowsHide:true});\n"
     assert "heuristic:spawn-hidden-window" in rules(run_heuristics(body, "notes.md"))
+
+
+# --- I1, measured: the two remaining false-positive shapes ---
+
+SVG_ATTR = 'd="M36.785 11.97h14.173v2.597h-5.572' + "h-.5v.2l1.2-3.4 2.5 0 0 1 " * 300 + '.5z"'
+
+
+def test_long_line_does_not_fire_on_an_svg_path_inside_a_component():
+    # Measured in two local repos: a Trustpilot logo path, 4693 chars, inside
+    # a .jsx. Path data has no quotes, parens, braces, semicolons, backslashes
+    # or dollars, so no JavaScript can be expressed in it.
+    line = "                " + SVG_ATTR
+    assert len(line) > 3000
+    assert run_heuristics(line + "\n", "src/components/TrustpilotSection.jsx") == []
+    assert run_heuristics("  <path " + SVG_ATTR + " />\n", "src/Icon.tsx") == []
+
+
+def test_long_line_still_fires_on_a_long_line_that_is_not_path_data():
+    body = 'const x = "%s";' % ("A" * 4000)
+    assert "heuristic:long-line" in rules(run_heuristics(body, "src/Icon.jsx"))
+
+
+def test_a_payload_line_is_not_mistaken_for_path_data():
+    body = 'd="M36.785";global.r=require;%s' % ("x" * 4000)
+    assert "heuristic:long-line" in rules(run_heuristics(body, "src/Icon.jsx"))
+
+
+def test_density_heuristics_are_off_inside_committed_build_output():
+    # I7 anchors dist/ to the top level so a nested one is scanned -- but a
+    # bundle still trips the length rule by construction. 35 hits, no true
+    # positives, in one local checkout.
+    for p in ("web/dist/assets/Dashboard-abc.js", "server/dist/services/x.js",
+              "packages/ui/build/index.js", "app/.next/static/chunk.js"):
+        assert run_heuristics("import{a as b}" + "x" * 9000, p) == [], p

@@ -275,3 +275,21 @@ def test_unresolvable_head_ref_exits_two(tmp_path):
     r = run(["--root", str(tmp_path), "--base-ref", base, "--head-ref", "no-such-ref"])
     assert r.returncode == 2
     assert "clean" not in r.stdout.lower()
+
+
+def test_a_payload_in_nested_build_output_is_still_caught_by_the_literals(tmp_path):
+    # The density heuristics are waived there; the literal indicators are not.
+    out = tmp_path / "web" / "dist" / "assets"
+    out.mkdir(parents=True)
+    (out / "index-abc123.js").write_text('import{a as b};global.i="A9-1800-1";\n')
+    r = run(["--root", str(tmp_path)])
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "A9-1800-1" in r.stdout
+
+
+def test_a_committed_bundle_alone_does_not_fail_the_check(tmp_path):
+    out = tmp_path / "web" / "dist" / "assets"
+    out.mkdir(parents=True)
+    (out / "index-abc123.js").write_text("import{$n as e,Gn as t}" + "x" * 90000 + "\n")
+    r = run(["--root", str(tmp_path)])
+    assert r.returncode == 0, r.stdout + r.stderr
