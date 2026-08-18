@@ -15,7 +15,7 @@ def render_text(findings: List[Finding]) -> str:
 
 
 def _md_escape(text: str) -> str:
-    return text.replace("|", "\\|").replace("\n", " ")
+    return text.replace("|", "\\|").replace("\r", " ").replace("\n", " ")
 
 
 def render_markdown(findings: List[Finding]) -> str:
@@ -28,7 +28,8 @@ def render_markdown(findings: List[Finding]) -> str:
             "|---|---|---|---|"]
     for f in findings:
         rows.append("| `%s` | %d | `%s` | %s |"
-                    % (f.path, f.line, f.rule, _md_escape(f.excerpt)[:200]))
+                    % (_md_escape(f.path), f.line, _md_escape(f.rule),
+                       _md_escape(f.excerpt)[:200]))
     return "\n".join(rows) + "\n"
 
 
