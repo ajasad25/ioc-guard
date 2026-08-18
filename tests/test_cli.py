@@ -293,3 +293,67 @@ def test_a_committed_bundle_alone_does_not_fail_the_check(tmp_path):
     (out / "index-abc123.js").write_text("import{$n as e,Gn as t}" + "x" * 90000 + "\n")
     r = run(["--root", str(tmp_path)])
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+# --- residuals from the scoped re-review ---
+
+def test_a_payload_in_top_level_build_is_caught(tmp_path):
+    # Reproduction: this reported "clean", exit 0, with no skipped-file line.
+    build = tmp_path / "build"
+    build.mkdir()
+    (build / "webpack.base.conf.js").write_text(
+        'global.i="A9-1800-1";\n'
+        "global['r']=require;\n"
+        "const cp=require('child_process');\n"
+        "cp.spawn(x,y,{windowsHide:true});\n")
+    r = run(["--root", str(tmp_path)])
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "A9-1800-1" in r.stdout
+    assert "heuristic:spawn-hidden-window" in r.stdout
+
+
+def test_a_payload_in_top_level_dist_or_next_is_caught(tmp_path):
+    for d in ("dist", ".next", "coverage"):
+        sub = tmp_path / d
+        sub.mkdir()
+        (sub / "chunk.js").write_text('global.i="A9-1800-1";\n')
+    r = run(["--root", str(tmp_path)])
+    assert r.returncode == 1, r.stdout + r.stderr
+    for d in ("dist", ".next", "coverage"):
+        assert "%s/chunk.js" % d in r.stdout
+
+
+def test_a_committed_top_level_bundle_alone_is_still_not_noise(tmp_path):
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index-abc.js").write_text("import{$n as e,Gn as t}" + "x" * 90000 + "\n")
+    r = run(["--root", str(tmp_path)])
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_config_bat_and_a_vue_component_get_the_structural_heuristics(tmp_path):
+    body = "var s='" + "\\u0061" * 60 + "';" + "x" * 4000
+    (tmp_path / "config.bat").write_text(body)
+    (tmp_path / "App.vue").write_text(body)
+    r = run(["--root", str(tmp_path)])
+    assert r.returncode == 1, r.stdout + r.stderr
+    for name in ("config.bat", "App.vue"):
+        assert "%s:1: [heuristic:long-line]" % name in r.stdout, r.stdout
+        assert "%s:1: [heuristic:unicode-escape-density]" % name in r.stdout
+
+
+def test_a_nul_no_longer_hides_a_payload_in_a_vue_file_or_config_bat(tmp_path):
+    (tmp_path / "Widget.vue").write_bytes(b'<script>\x00</script>\nglobal.i="A9-1800-1";\n')
+    (tmp_path / "config.bat").write_bytes(b'@echo off\x00\nrem A9-1800-1\n')
+    r = run(["--root", str(tmp_path)])
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "Widget.vue" in r.stdout and "config.bat" in r.stdout
+    assert r.stdout.count("heuristic:nul-in-source") == 2
+
+
+def test_the_skipped_line_names_the_files(tmp_path):
+    (tmp_path / "logo.png").write_bytes(b"\x89PNG\x00\x00binary")
+    (tmp_path / "a.js").write_text("module.exports={};\n")
+    r = run(["--root", str(tmp_path)])
+    assert "skipped 1 file(s)" in r.stderr
+    assert "logo.png" in r.stderr, r.stderr

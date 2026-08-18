@@ -2,14 +2,20 @@ from ioc_guard.walk import (ScanStats, allows_density_heuristics, is_excluded,
                             is_source_like, iter_files)
 
 
-def test_excludes_dependency_and_build_directories():
+def test_excludes_dependency_and_engine_directories():
     assert is_excluded("node_modules/foo/index.js")
-    assert is_excluded("dist/bundle.js")
-    assert is_excluded(".next/server/page.js")
-    assert is_excluded("build/output.js")
-    assert is_excluded("coverage/lcov-report/index.js")
     assert is_excluded(".git/config")
-    assert is_excluded(".ioc-guard/iocs.txt")
+    assert is_excluded(".ioc-guard/iocs.txt")   # CI checks the engine out here
+
+
+def test_build_output_is_walked_even_at_the_top_level():
+    # The last free hiding place, and the easiest: no nesting required.
+    # build/webpack.base.conf.js is checked-in source in Vue-CLI 2.
+    for p in ("dist/bundle.js", ".next/server/page.js", "build/output.js",
+              "build/webpack.base.conf.js", "coverage/lcov-report/index.js"):
+        assert not is_excluded(p), p
+        # ...but the density heuristics stay waived there
+        assert not allows_density_heuristics(p), p
 
 
 def test_dependency_directories_are_excluded_at_any_depth():
@@ -18,7 +24,7 @@ def test_dependency_directories_are_excluded_at_any_depth():
     assert is_excluded("a/b/.git/config")
 
 
-def test_build_directory_exclusions_are_anchored_to_the_top_level():
+def test_build_output_is_walked_at_any_depth_too():
     # I7 regression: an unanchored match made these free hiding places at
     # every depth. build/webpack.config.js is the stock Vue-CLI 2 layout, and
     # a monorepo puts one under every package.
@@ -192,3 +198,62 @@ def test_symlinks_are_not_followed(tmp_path):
 def test_iter_files_without_stats_keeps_the_old_two_tuple_contract(tmp_path):
     (tmp_path / "a.js").write_text("hello")
     assert dict(iter_files(tmp_path)) == {"a.js": "hello"}
+
+
+# --- residuals from the scoped re-review ---
+
+def test_top_level_build_output_is_walked(tmp_path):
+    (tmp_path / "build").mkdir()
+    (tmp_path / "build" / "webpack.base.conf.js").write_text("module.exports={};\n")
+    (tmp_path / "dist").mkdir()
+    (tmp_path / "dist" / "bundle.js").write_text("var a=1;\n")
+    got = dict(iter_files(tmp_path))
+    assert "build/webpack.base.conf.js" in got
+    assert "dist/bundle.js" in got
+
+
+def test_node_modules_and_the_engine_checkout_are_still_never_walked(tmp_path):
+    for d in ("node_modules", "vendor", ".ioc-guard"):
+        (tmp_path / d).mkdir()
+        (tmp_path / d / "x.js").write_text("var a=1;\n")
+    assert dict(iter_files(tmp_path)) == {}
+
+
+def test_the_widened_source_allowlist_covers_the_component_and_script_formats():
+    for name in ("src/App.vue", "src/Widget.svelte", "pages/index.astro",
+                 "docs/guide.mdx", "config.bat", "install.cmd", "tool.ps1",
+                 "pyproject.toml", ".env", ".env.production", "Dockerfile",
+                 "docker/Dockerfile", "Makefile"):
+        assert is_source_like(name), name
+        assert allows_density_heuristics(name), name
+
+
+def test_the_allowlist_still_excludes_data_and_binary_names():
+    for name in ("logo.png", "fonts/x.woff2", "data.parquet"):
+        assert not is_source_like(name), name
+
+
+def test_a_nul_no_longer_hides_a_vue_component_or_a_batch_file(tmp_path):
+    (tmp_path / "Widget.vue").write_bytes(b'<template>\x00</template>\nglobal.i="A9-1800-1";\n')
+    (tmp_path / "config.bat").write_bytes(b'@echo off\x00\nrem A9-1800-1\n')
+    got = dict(iter_files(tmp_path))
+    assert set(got) == {"Widget.vue", "config.bat"}
+    assert all("A9-1800-1" in text for text in got.values())
+
+
+def test_skipped_files_are_named_not_just_counted(tmp_path):
+    (tmp_path / "logo.png").write_bytes(b"\x89PNG\x00\x00binary")
+    stats = ScanStats()
+    dict(iter_files(tmp_path, stats))
+    lines = stats.describe()
+    assert any("logo.png" in l and "binary" in l for l in lines), lines
+
+
+def test_the_named_skip_list_is_bounded(tmp_path):
+    for i in range(ScanStats.MAX_NAMED + 7):
+        (tmp_path / ("b%d.png" % i)).write_bytes(b"\x00\x00")
+    stats = ScanStats()
+    dict(iter_files(tmp_path, stats))
+    assert stats.skipped == ScanStats.MAX_NAMED + 7
+    assert len(stats.names) == ScanStats.MAX_NAMED
+    assert "...and 7 more not listed" in stats.describe()[-1]

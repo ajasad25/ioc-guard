@@ -24,3 +24,12 @@ def test_readme_states_what_the_control_does_not_catch():
     assert "## What this does not catch" in README
     assert "--no-verify" in README
     assert 'no known indicators' in README
+
+
+def test_readme_describes_the_heuristic_scoping_as_an_allowlist():
+    # It used to say "a payload parked in a .svg, .html or .json file", which
+    # understates an allowlist by implying three exceptions rather than most
+    # file types.
+    assert "allowlist of names" in README
+    assert "SOURCE_SUFFIXES" in README
+    assert "literal `iocs.txt` list alone" in README

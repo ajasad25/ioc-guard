@@ -9,10 +9,17 @@ from typing import Iterator, Optional, Tuple
 EXCLUDED_DIRS_ANY_DEPTH = (".git", "node_modules", "vendor",
                            ".pytest_cache", "__pycache__")
 
-# Build output, anchored to the top level only. `build/webpack.config.js` is the
-# standard Vue-CLI 2 layout, and an unanchored match turns every one of these
-# names into a free hiding place at any depth -- including `src/.ioc-guard/`.
-EXCLUDED_DIRS_TOP_LEVEL = ("dist", "build", "coverage", ".next", ".ioc-guard")
+# Excluded at the top level only. `.ioc-guard` is where CI checks the engine
+# out, so scanning it would be self-detection; nested `src/.ioc-guard/` is a
+# hiding place and is still scanned.
+#
+# Build output (dist, build, coverage, .next) is deliberately NOT here any
+# more. Excluding it left the easiest hiding place in the tool: an attacker
+# needed no nesting at all, and `build/webpack.base.conf.js` is checked-in
+# source in the standard Vue-CLI 2 layout. Those directories are walked and
+# matched against the literal indicators like anything else; only the
+# length/density heuristics are waived, through BUILD_OUTPUT_DIRS below.
+EXCLUDED_DIRS_TOP_LEVEL = (".ioc-guard",)
 
 # Kept as a union for callers that only ask "is this name a build directory".
 EXCLUDED_DIRS = EXCLUDED_DIRS_ANY_DEPTH + EXCLUDED_DIRS_TOP_LEVEL
@@ -32,16 +39,29 @@ NUL_WINDOW = 8192
 # Names where the file is meant to hold text a build tool reads or executes.
 # A NUL byte in one of these is itself an indicator: it costs an attacker two
 # bytes to add and, before this, made the whole file invisible to every rule.
-SOURCE_SUFFIXES = (".js", ".cjs", ".mjs", ".jsx", ".ts", ".tsx", ".mts", ".cts",
-                   ".json", ".yml", ".yaml", ".md", ".sh", ".bash", ".zsh", ".py")
+SOURCE_SUFFIXES = (
+    # JavaScript / TypeScript, and the component formats that compile to it
+    ".js", ".cjs", ".mjs", ".jsx", ".ts", ".tsx", ".mts", ".cts",
+    ".vue", ".svelte", ".astro", ".mdx",
+    # data and config a build tool reads
+    ".json", ".yml", ".yaml", ".toml", ".env", ".md",
+    # anything a build step executes. The Windows batch file the campaign
+    # drops is itself a named indicator in iocs.txt, so a file named after an
+    # IOC must not be the one file that gets no structural analysis.
+    ".sh", ".bash", ".zsh", ".py", ".bat", ".cmd", ".ps1",
+)
 
-# Generated bundles live here. I7 anchors these to the top level so that a
-# nested one is no longer a free hiding place -- but a bundle is still a bundle,
-# and it trips the length/density rules by construction. Measured on one local
-# checkout: scanning nested web/dist and server/dist produced 35 long-line hits
-# and zero true positives. So they are scanned for the literal indicators, which
-# is what closes the hiding place, and exempted from the density heuristics --
-# exactly the treatment I7 prescribes for *.min.js.
+# Same intent, for the build files that carry no extension at all.
+SOURCE_BASENAMES = ("dockerfile", "makefile", "gnumakefile", "procfile",
+                    ".gitignore", ".npmrc", ".babelrc", ".eslintrc")
+
+# Generated bundles live here, at any depth including the top level. They are
+# walked and matched against the literal indicators -- that is what closes the
+# hiding place -- but a bundle trips the length/density rules by construction:
+# one local checkout produced 35 long-line hits from web/dist and server/dist
+# with zero true positives. So only the density heuristics are waived, exactly
+# the treatment I7 prescribes for *.min.js. space-padding, spawn-hidden-window
+# and nul-in-source still run here.
 BUILD_OUTPUT_DIRS = ("dist", "build", "coverage", ".next")
 
 # Data and markup formats where a >3000 char line or a run of escapes is
@@ -83,17 +103,42 @@ class ScanStats(object):
     total; ignoring it keeps the old (relpath, text) iteration contract intact.
     """
 
-    __slots__ = ("binary", "oversize", "unreadable", "special")
+    __slots__ = ("binary", "oversize", "unreadable", "special", "names")
+
+    # A bare count is not actionable: "skipped 2 file(s)" tells an operator
+    # nothing about whether one of them mattered. Names are kept, bounded.
+    MAX_NAMED = 20
 
     def __init__(self):
         self.binary = 0
         self.oversize = 0
         self.unreadable = 0
         self.special = 0
+        self.names = []
+
+    def note(self, reason: str, relpath: str) -> None:
+        setattr(self, reason, getattr(self, reason) + 1)
+        if len(self.names) < ScanStats.MAX_NAMED:
+            self.names.append((relpath, reason))
 
     @property
     def skipped(self) -> int:
         return self.binary + self.oversize + self.unreadable + self.special
+
+    def describe(self):
+        """Lines naming what was skipped, source-adjacent names first."""
+        order = {"binary": 0, "oversize": 1, "special": 2, "unreadable": 3}
+        ranked = sorted(self.names,
+                        key=lambda nr: (0 if is_source_like(nr[0]) else 1,
+                                        order.get(nr[1], 9), nr[0]))
+        label = {"binary": "binary content", "oversize": ">8MB",
+                 "special": "not a regular file (symlink, fifo, device)",
+                 "unreadable": "unreadable"}
+        out = ["  %s (%s)" % (rel, label.get(reason, reason)) for rel, reason in ranked]
+        hidden = self.skipped - len(self.names)
+        if hidden > 0:
+            out.append("  ...and %d more not listed" % hidden)
+        return out
 
 
 def _norm(relpath: str) -> str:
@@ -117,7 +162,10 @@ def is_excluded(relpath: str) -> bool:
 def is_source_like(relpath: str) -> bool:
     """True for names a build tool reads as text, where a NUL is an indicator."""
     base = _basename(relpath).lower()
-    if base == ".gitignore":
+    if base in SOURCE_BASENAMES:
+        return True
+    # .env, .env.local, .env.production ...
+    if base == ".env" or base.startswith(".env."):
         return True
     if fnmatch.fnmatch(base, "*.config.*"):
         return True
@@ -145,6 +193,8 @@ def allows_density_heuristics(relpath: str) -> bool:
     if base.endswith(NON_CODE_SUFFIXES):
         return False
     if fnmatch.fnmatch(base, "*.config.*"):
+        return True
+    if base in SOURCE_BASENAMES or base == ".env" or base.startswith(".env."):
         return True
     return base.endswith(SOURCE_SUFFIXES)
 
@@ -195,28 +245,28 @@ def iter_files(root, stats: Optional[ScanStats] = None) -> Iterator[Tuple[str, s
                 st = os.lstat(full)
             except OSError:
                 if stats is not None:
-                    stats.unreadable += 1
+                    stats.note("unreadable", rel)
                 continue
             if not stat.S_ISREG(st.st_mode):
                 if stats is not None:
-                    stats.special += 1
+                    stats.note("special", rel)
                 continue
             if st.st_size > MAX_BYTES:
                 if stats is not None:
-                    stats.oversize += 1
+                    stats.note("oversize", rel)
                 continue
             try:
                 with open(full, "rb") as fh:
                     data = fh.read()
             except OSError:
                 if stats is not None:
-                    stats.unreadable += 1
+                    stats.note("unreadable", rel)
                 continue
             if _is_engine_self_exempt(full, data):
                 continue
             if _looks_binary(data) and not is_source_like(rel):
                 if stats is not None:
-                    stats.binary += 1
+                    stats.note("binary", rel)
                 continue
             # A source-like file carrying a NUL is decoded with replacement and
             # scanned anyway; heuristics.py reports the NUL itself as a finding.

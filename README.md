@@ -117,11 +117,22 @@ Be honest with yourself about the boundary of this control.
 - **The heuristics only catch a lazy repack.** A >3000 character line, dense
   `\u00XX` escapes, 300+ spaces before a closing `};`, `child_process` with
   `windowsHide` — every one of those is avoidable by an attacker who bothers.
-  They are scoped to source and build-config files, so a payload parked in a
-  `.svg`, `.html` or `.json` file is only caught by the literal list.
-- **Top-level `dist/`, `build/`, `coverage/`, `.next/` are not scanned**, nor is
-  anything under `node_modules/` or `vendor/` at any depth. That is a deliberate
-  false-positive trade; it is also a hiding place.
+- **The structural heuristics run on an allowlist of names, not on everything.**
+  Only files whose name is in `SOURCE_SUFFIXES` / `SOURCE_BASENAMES` in
+  `ioc_guard/walk.py` — JavaScript and TypeScript and the component formats that
+  compile to it, `.json`/`.yml`/`.toml`/`.env`, shell/batch/PowerShell/Python,
+  `*.config.*`, `Dockerfile`, `Makefile` and friends — get structural analysis.
+  **Every other file type is covered by the literal `iocs.txt` list alone**, which
+  is most of them: `.rb`, `.go`, `.java`, `.php`, `.rs`, `.c`, `.sql`, anything
+  with no extension that is not on the list. The length and density rules are
+  narrower still — they are additionally waived for `.svg`, `.html`, `.md`,
+  `.json`, `.csv`, `.lock`, `.snap`, `*.min.js` and build output, where they only
+  ever produced noise. Widening the allowlist is a one-line change; if your repos
+  use a format that is not on it, add it.
+- **`node_modules/` and `vendor/` are never scanned** at any depth, and the
+  top-level `.ioc-guard/` checkout is skipped. That is a deliberate
+  false-positive-and-volume trade; it is also a hiding place. Build output
+  (`dist/`, `build/`, `coverage/`, `.next/`) *is* scanned for literal indicators.
 - **Server-side scans see only what is pushed.** A repo that never runs the
   workflow, or a branch pushed before onboarding, is unexamined.
 - **Detection is not remediation.** The incident report is explicit: any machine

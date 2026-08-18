@@ -77,6 +77,12 @@ trap 'rm -rf "$SCRATCH"' EXIT
 skip_scan=0
 if [ -n "${IOC_GUARD_SKIP_SCAN:-}" ] && [ "${IOC_GUARD_SKIP_SCAN}" != "0" ]; then
   skip_scan=1
+  # Leave a trace, like IOC_GUARD=off does. On a new-branch push there is no
+  # base, so there is no diff pass and neither the force-push nor the deletion
+  # case applies: this flag then disables every content check there is, and an
+  # unlogged way to do that is exactly the gap the override log exists to close.
+  mkdir -p "$(dirname "$LOG")" 2>/dev/null
+  skip_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 fi
 
 # Materialise the files one commit changed and scan them.
@@ -185,8 +191,11 @@ while read -r local_ref local_sha remote_ref remote_sha; do
   fi
 
   if [ "$skip_scan" = "1" ]; then
+    printf '%s SKIP_SCAN repo=%s remote=%s ref=%s local=%s remote_sha=%s cwd=%s\n' \
+      "$skip_ts" "$remote_url" "$remote_name" "$remote_ref" "$local_sha" "$remote_sha" "$PWD" \
+      >> "$LOG" 2>/dev/null
     echo "ioc-guard: IOC_GUARD_SKIP_SCAN=1 — content scan skipped for $remote_ref." >&2
-    echo "  The force-push and deletion checks still applied." >&2
+    echo "  The force-push and deletion checks still applied. Logged to $LOG" >&2
   else
     # The tip tree, so the state actually being published is always scanned.
     scan_commit "$local_sha" "$base" "the tip of $remote_ref"

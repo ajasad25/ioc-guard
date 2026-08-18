@@ -294,3 +294,20 @@ def test_a_missing_engine_is_an_operational_error_not_a_block(tmp_path):
     r = run_hook(d, "refs/heads/feat %s refs/heads/feat %s\n" % (sha, ZERO),
                  env={"IOC_GUARD_ENGINE": str(tmp_path / "nowhere")})
     assert r.returncode == 2, "a broken install must not look like findings or a pass"
+
+
+def test_skip_scan_is_logged_like_the_full_override(tmp_path):
+    # On a new-branch push there is no base, so no diff pass and neither the
+    # force-push nor the deletion case applies: the flag then disables every
+    # content check, and it used to leave no trace at all.
+    d = make_repo(tmp_path, "skiplog")
+    sha = commit(d, "eslint.config.js", 'global.i="A9-1800-1";\n')
+    log = tmp_path / "override.log"
+    r = run_hook(d, "refs/heads/feat %s refs/heads/feat %s\n" % (sha, ZERO),
+                 env={"IOC_GUARD_SKIP_SCAN": "1", "IOC_GUARD_LOG": str(log)})
+    assert r.returncode == 0, r.stdout + r.stderr
+    text = log.read_text()
+    assert "SKIP_SCAN" in text
+    assert "refs/heads/feat" in text
+    assert sha in text
+    assert str(log) in (r.stdout + r.stderr), "the operator must be told where it was logged"

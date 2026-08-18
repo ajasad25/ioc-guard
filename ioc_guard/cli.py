@@ -137,8 +137,10 @@ def main(argv=None) -> int:
     # A file the walk never opened is not a clean file. Report the gap on
     # stderr so it survives --quiet and shows up in CI logs and hook output.
     if stats.skipped:
-        sys.stderr.write("ioc-guard: skipped %d file(s) (binary, >8MB, symlink or unreadable)\n"
+        sys.stderr.write("ioc-guard: skipped %d file(s) (binary, >8MB, symlink or unreadable):\n"
                          % stats.skipped)
+        for line in stats.describe():
+            sys.stderr.write(line + "\n")
 
     findings = sorted(set(findings), key=lambda f: (f.path, f.line, f.rule))
 

@@ -168,3 +168,33 @@ def test_density_heuristics_are_off_inside_committed_build_output():
     for p in ("web/dist/assets/Dashboard-abc.js", "server/dist/services/x.js",
               "packages/ui/build/index.js", "app/.next/static/chunk.js"):
         assert run_heuristics("import{a as b}" + "x" * 9000, p) == [], p
+
+
+# --- residual 2: the heuristics reached almost nothing outside .js/.ts ---
+
+PAYLOAD_SHAPE = "var s='" + "\\u0061" * 60 + "';" + "x" * 4000
+
+
+def test_the_structural_heuristics_reach_the_widened_allowlist():
+    # Verified failing before: an identical payload in App.vue, config.bat,
+    # Dockerfile and tool.ps1 fired on x.js only.
+    for name in ("src/App.vue", "config.bat", "Dockerfile", "tool.ps1",
+                 "src/Widget.svelte", "pages/index.astro", "x.js",
+                 "pyproject.toml", ".env", "docker/Dockerfile", "Makefile"):
+        got = rules(run_heuristics(PAYLOAD_SHAPE, name))
+        assert "heuristic:long-line" in got, name
+        assert "heuristic:unicode-escape-density" in got, name
+
+
+def test_a_nul_in_the_widened_allowlist_is_reported():
+    for name in ("src/App.vue", "config.bat", "Dockerfile", "tool.ps1", ".env"):
+        assert "heuristic:nul-in-source" in rules(run_heuristics("a\x00b", name)), name
+
+
+def test_build_output_keeps_the_precise_rules_and_loses_only_density():
+    body = "module.exports = {\n  a: 1,\n}" + " " * 507 + ";\n"
+    assert "heuristic:space-padding" in rules(run_heuristics(body, "build/webpack.base.conf.js"))
+    spawn = "const cp=require('child_process');\ncp.spawn(x,y,{windowsHide:true});\n"
+    assert "heuristic:spawn-hidden-window" in rules(run_heuristics(spawn, "dist/main.js"))
+    assert "heuristic:nul-in-source" in rules(run_heuristics("a\x00b", "build/webpack.base.conf.js"))
+    assert run_heuristics("x" * 9000, "build/webpack.base.conf.js") == []
