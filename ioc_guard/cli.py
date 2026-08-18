@@ -36,29 +36,36 @@ def _require_ref(root: str, ref: str) -> bool:
     return proc.returncode == 0
 
 
-def _changed_paths(root: str, base_ref: str) -> List[str]:
-    proc = subprocess.run(["git", "-C", root, "diff", "--name-only", base_ref, "HEAD"],
+def _changed_paths(root: str, base_ref: str, head_ref: str) -> List[str]:
+    """Paths changed between two refs, NUL-delimited.
+
+    Without -z, git's default core.quotePath=true returns C-quoted, octal-
+    escaped names for anything non-ASCII -- "caf\\303\\251.js" -- which then
+    matches no real path and was dropped silently, so a wholesale CRLF flip of
+    such a file produced no finding at all.
+    """
+    proc = subprocess.run(["git", "-C", root, "diff", "-z", "--name-only",
+                           base_ref, head_ref],
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if proc.returncode != 0:
-        raise RuntimeError("git diff against %s failed: %s"
-                           % (base_ref, proc.stderr.decode("utf-8", "replace").strip()))
-    return [p for p in proc.stdout.decode("utf-8", "replace").splitlines() if p]
+        raise RuntimeError("git diff %s..%s failed: %s"
+                           % (base_ref, head_ref,
+                              proc.stderr.decode("utf-8", "replace").strip()))
+    return [os.fsdecode(raw) for raw in proc.stdout.split(b"\0") if raw]
 
 
-def _diff_findings(root: str, base_ref: str) -> List[Finding]:
+def _diff_findings(root: str, base_ref: str, head_ref: str) -> List[Finding]:
     findings = []
-    for path in _changed_paths(root, base_ref):
+    for path in _changed_paths(root, base_ref, head_ref):
         if is_excluded(path):
             continue
-        head_file = os.path.join(root, path)
-        if not os.path.exists(head_file):
-            continue
-        try:
-            with open(head_file, "rb") as fh:
-                head = fh.read()
-        except OSError:
-            continue
-        findings.extend(compare_file(path, _git_show(root, base_ref, path), head))
+        # Both sides come from git, never from the working tree. A path listed
+        # by the diff but absent from the head tree is a DELETION, which for
+        # .gitignore is strictly worse than editing the .env line out -- it
+        # used to be skipped and reported clean.
+        base = _git_show(root, base_ref, path)
+        head = _git_show(root, head_ref, path)
+        findings.extend(compare_file(path, base, head))
     return findings
 
 
@@ -69,6 +76,10 @@ def main(argv=None) -> int:
     p.add_argument("--iocs", default=str(DEFAULT_IOCS))
     p.add_argument("--base-ref", default=None,
                    help="git ref to diff against; enables .gitignore and CRLF rules")
+    p.add_argument("--head-ref", default="HEAD",
+                   help="git ref holding the new state (default HEAD); used with --base-ref")
+    p.add_argument("--diff-only", action="store_true",
+                   help="run only the base-ref diff rules, skipping the tree walk")
     p.add_argument("--json", dest="json_out", default=None)
     p.add_argument("--summary", default=None, help="append a markdown summary to this file")
     p.add_argument("--quiet", action="store_true")
@@ -92,6 +103,10 @@ def main(argv=None) -> int:
         sys.stderr.write("ioc-guard: ERROR: not a directory: %s\n" % root)
         return EXIT_ERROR
 
+    if args.diff_only and not args.base_ref:
+        sys.stderr.write("ioc-guard: ERROR: --diff-only requires --base-ref.\n")
+        return EXIT_ERROR
+
     if args.base_ref and not _require_ref(root, args.base_ref):
         sys.stderr.write(
             "ioc-guard: ERROR: cannot resolve --base-ref %r in %s.\n"
@@ -99,14 +114,22 @@ def main(argv=None) -> int:
             % (args.base_ref, root))
         return EXIT_ERROR
 
+    if args.base_ref and not _require_ref(root, args.head_ref):
+        sys.stderr.write(
+            "ioc-guard: ERROR: cannot resolve --head-ref %r in %s.\n"
+            "  Refusing to report a scan whose diff rules never ran.\n"
+            % (args.head_ref, root))
+        return EXIT_ERROR
+
     findings = []
     stats = ScanStats()
     try:
-        for relpath, text in iter_files(root, stats):
-            findings.extend(scan_text(text, patterns, relpath))
-            findings.extend(run_heuristics(text, relpath))
+        if not args.diff_only:
+            for relpath, text in iter_files(root, stats):
+                findings.extend(scan_text(text, patterns, relpath))
+                findings.extend(run_heuristics(text, relpath))
         if args.base_ref:
-            findings.extend(_diff_findings(root, args.base_ref))
+            findings.extend(_diff_findings(root, args.base_ref, args.head_ref))
     except Exception as exc:
         sys.stderr.write("ioc-guard: ERROR: scan failed: %s\n" % exc)
         return EXIT_ERROR

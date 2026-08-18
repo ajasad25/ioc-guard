@@ -167,3 +167,111 @@ def test_an_svg_and_a_long_readme_do_not_fail_a_clean_repo(tmp_path):
     (tmp_path / "index.html").write_text("<div>%s</div>\n" % ("x" * 6000))
     r = run(["--root", str(tmp_path)])
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+# --- base-ref diff rules: I2 (quoted paths) and I4 (deletions) ---
+
+def make_git_repo(tmp_path):
+    import subprocess as sp
+
+    def git(*a):
+        sp.run(["git", "-C", str(tmp_path)] + list(a), check=True,
+               stdout=sp.DEVNULL, stderr=sp.DEVNULL)
+
+    git("init", "-q", "-b", "main")
+    git("config", "user.email", "t@example.com")
+    git("config", "user.name", "t")
+    # the default this bug lived under; set explicitly so the test is not at
+    # the mercy of the machine's global git config
+    git("config", "core.quotePath", "true")
+    return git
+
+
+def head_of(tmp_path):
+    import subprocess as sp
+    return sp.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+                  capture_output=True, text=True).stdout.strip()
+
+
+def test_a_c_quoted_unicode_path_is_seen_by_the_diff_rules(tmp_path):
+    # I2 regression: without -z git returns "caf\303\251.js", which matched no
+    # real path, so a wholesale CRLF flip of that file produced no finding.
+    git = make_git_repo(tmp_path)
+    body = "\n".join("line %d" % i for i in range(200)) + "\n"
+    (tmp_path / "café.js").write_text(body, encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-q", "-m", "base")
+    base = head_of(tmp_path)
+    (tmp_path / "café.js").write_bytes(body.replace("\n", "\r\n").encode("utf-8"))
+    git("add", "-A")
+    git("commit", "-q", "-m", "crlf flip")
+
+    r = run(["--root", str(tmp_path), "--base-ref", base])
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "diff:crlf-flip" in r.stdout
+
+
+def test_deleting_gitignore_entirely_is_flagged(tmp_path):
+    # I4 regression: the path is listed by the diff but absent from the head
+    # tree, and was skipped -- so deleting the file scored better than editing it.
+    git = make_git_repo(tmp_path)
+    (tmp_path / ".gitignore").write_text("node_modules\n.env\n")
+    (tmp_path / "a.js").write_text("module.exports={};\n")
+    git("add", "-A")
+    git("commit", "-q", "-m", "base")
+    base = head_of(tmp_path)
+    (tmp_path / ".gitignore").unlink()
+    git("add", "-A")
+    git("commit", "-q", "-m", "delete gitignore")
+
+    r = run(["--root", str(tmp_path), "--base-ref", base])
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "diff:gitignore-lost-env" in r.stdout
+
+
+def test_head_ref_lets_the_diff_rules_run_against_a_ref_that_is_not_head(tmp_path):
+    git = make_git_repo(tmp_path)
+    (tmp_path / ".gitignore").write_text(".env\n")
+    git("add", "-A")
+    git("commit", "-q", "-m", "base")
+    base = head_of(tmp_path)
+    (tmp_path / ".gitignore").write_text("node_modules\n")
+    git("add", "-A")
+    git("commit", "-q", "-m", "strip env")
+    tip = head_of(tmp_path)
+    git("checkout", "-q", base)          # detach: HEAD is no longer the tip
+
+    r = run(["--root", str(tmp_path), "--base-ref", base, "--head-ref", tip])
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "diff:gitignore-lost-env" in r.stdout
+
+
+def test_diff_only_skips_the_tree_walk(tmp_path):
+    git = make_git_repo(tmp_path)
+    (tmp_path / "a.js").write_text("module.exports={};\n")
+    git("add", "-A")
+    git("commit", "-q", "-m", "base")
+    base = head_of(tmp_path)
+    # untracked payload in the working tree: the tree walk would flag it,
+    # the diff pass must not look at it at all
+    (tmp_path / "local-notes.js").write_text('global.i="A9-1800-1";\n')
+
+    assert run(["--root", str(tmp_path)]).returncode == 1
+    r = run(["--root", str(tmp_path), "--base-ref", base, "--diff-only"])
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_diff_only_without_base_ref_is_an_operational_error(tmp_path):
+    r = run(["--root", str(tmp_path), "--diff-only"])
+    assert r.returncode == 2
+
+
+def test_unresolvable_head_ref_exits_two(tmp_path):
+    git = make_git_repo(tmp_path)
+    (tmp_path / "a.js").write_text("module.exports={};\n")
+    git("add", "-A")
+    git("commit", "-q", "-m", "base")
+    base = head_of(tmp_path)
+    r = run(["--root", str(tmp_path), "--base-ref", base, "--head-ref", "no-such-ref"])
+    assert r.returncode == 2
+    assert "clean" not in r.stdout.lower()
