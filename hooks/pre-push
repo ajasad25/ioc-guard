@@ -132,8 +132,14 @@ scan_commit() {
     return 2
   fi
 
-  PYTHONPATH="$ENGINE" "$PYTHON" -m ioc_guard --root "$tmp" --iocs "$ENGINE/iocs.txt" </dev/null
+  # The report goes to a file and is printed only when something is wrong.
+  # A range of 30 commits would otherwise emit 30 "clean" lines, and a "clean"
+  # line printed immediately after a BLOCKED verdict reads like the verdict.
+  # stderr is left to flow through, so errors and the skipped-file count show.
+  PYTHONPATH="$ENGINE" "$PYTHON" -m ioc_guard --root "$tmp" --iocs "$ENGINE/iocs.txt" \
+    > "$SCRATCH/report.$scan_seq" </dev/null
   rc=$?
+  if [ "$rc" != "0" ]; then cat "$SCRATCH/report.$scan_seq" >&2; fi
   case "$rc" in
     0|1) return "$rc" ;;
     *)   return 2 ;;
@@ -227,9 +233,12 @@ while read -r local_ref local_sha remote_ref remote_sha; do
   # against the repo itself, comparing the base the remote actually has against
   # the ref being pushed.
   if [ "$have_base" = "1" ]; then
+    scan_seq=$((scan_seq + 1))
     PYTHONPATH="$ENGINE" "$PYTHON" -m ioc_guard --root "$PWD" --iocs "$ENGINE/iocs.txt" \
-      --base-ref "$base" --head-ref "$local_sha" --diff-only </dev/null
+      --base-ref "$base" --head-ref "$local_sha" --diff-only \
+      > "$SCRATCH/report.$scan_seq" </dev/null
     rc=$?
+    if [ "$rc" != "0" ]; then cat "$SCRATCH/report.$scan_seq" >&2; fi
     case "$rc" in
       0) ;;
       1) echo "ioc-guard: BLOCKED — .gitignore/CRLF damage in the range pushed to $remote_ref" >&2
