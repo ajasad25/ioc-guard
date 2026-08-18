@@ -29,6 +29,8 @@ eth_getTransactionCount
 eth\.blockscout\.com
 ethereum-rpc\.publicnode\.com
 eth\.drpc\.org
+1rpc\.io
+blastapi\.io
 bsc-dataseed\.binance\.org
 bsc-rpc\.publicnode\.com
 api\.trongrid\.io
@@ -37,6 +39,9 @@ fullnode\.mainnet\.aptoslabs\.com
 # --- loader runtime shape ---
 global\s*\[\s*['"]r['"]\s*\]\s*=\s*require
 global\.i\s*=\s*['"]A9-
+# Variant A tags the victim repo through global['!'] rather than global.i;
+# the value differs per campaign ('9-3266-5', '9-1800'), the shape does not.
+global\s*\[\s*['"]!['"]\s*\]\s*=
 
 # --- XOR keys ---
 2\[gWfGj;<:-93Z\^C

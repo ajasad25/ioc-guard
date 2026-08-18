@@ -50,3 +50,35 @@ def test_line_numbers_are_one_based_and_correct():
     pats = load_patterns(IOCS)
     found = scan_text("clean\nclean\nhelloipbot\n", pats, "a.js")
     assert found[0].line == 3
+
+
+# --- I9: indicators from the incident report's own tables ---
+
+def test_variant_a_campaign_tag_form_is_detected():
+    pats = load_patterns(IOCS)
+    for body in ("global['!']='9-3266-5';",
+                 'global["!"] = "9-1800";',
+                 "global [ '!' ] =x"):
+        assert scan_text(body, pats, "eslint.config.js"), body
+
+
+def test_the_campaign_tag_pattern_does_not_fire_on_ordinary_globals():
+    pats = load_patterns(IOCS)
+    for body in ("global.name = 'x';", "global['crypto'] = require('crypto');",
+                 "if (a !== b) { global.x = 1; }"):
+        assert scan_text(body, pats, "app.js") == [], body
+
+
+def test_variant_b_rpc_hosts_are_detected():
+    pats = load_patterns(IOCS)
+    for host in ("1rpc.io", "blastapi.io", "eth.drpc.org", "eth.blockscout.com"):
+        assert scan_text("fetch('https://%s/eth')" % host, pats, "a.js"), host
+
+
+def test_every_pattern_in_the_file_compiles_and_none_is_empty():
+    # load_patterns compiles each line; a bad regex would raise here, and an
+    # empty pattern would match every line of every file in every repo.
+    pats = load_patterns(IOCS)
+    assert len(pats) >= 20
+    assert all(label.strip() for label, _ in pats)
+    assert all(rx.search("") is None for _, rx in pats), "no pattern may match empty text"
