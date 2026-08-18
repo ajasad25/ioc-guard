@@ -90,3 +90,42 @@ def test_new_branch_with_no_remote_counterpart_is_scanned_not_rejected(tmp_path)
     sha = commit(d, "a.js", "module.exports={};\n")
     r = run_hook(d, "refs/heads/feat %s refs/heads/feat %s\n" % (sha, ZERO))
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_a_unicode_filename_cannot_smuggle_an_indicator(tmp_path):
+    # Regression: git C-quotes non-ASCII paths without -z, which previously made
+    # the archive step match nothing and the scan report clean.
+    d = make_repo(tmp_path, "unicode")
+    first = commit(d, "a.js", "module.exports={};\n")
+    second = commit(d, "café.js", 'global.i="A9-1800-1";\n')
+    r = run_hook(d, "refs/heads/main %s refs/heads/main %s\n" % (second, first))
+    assert r.returncode != 0, "a rename must not defeat the hook:\n" + r.stdout + r.stderr
+
+
+def test_a_filename_with_a_space_is_still_scanned(tmp_path):
+    d = make_repo(tmp_path, "space")
+    first = commit(d, "a.js", "module.exports={};\n")
+    second = commit(d, "my config.js", 'global.i="A9-1800-1";\n')
+    r = run_hook(d, "refs/heads/main %s refs/heads/main %s\n" % (second, first))
+    assert r.returncode != 0
+
+
+def test_a_filename_with_a_quote_is_still_scanned(tmp_path):
+    d = make_repo(tmp_path, "quote")
+    first = commit(d, "a.js", "module.exports={};\n")
+    second = commit(d, 'we"rd.js', 'global.i="A9-1800-1";\n')
+    r = run_hook(d, "refs/heads/main %s refs/heads/main %s\n" % (second, first))
+    assert r.returncode != 0
+
+
+def test_override_log_records_the_ref_and_shas(tmp_path):
+    d = make_repo(tmp_path, "overridelog")
+    first = commit(d, "a.js", "module.exports={};\n")
+    git(d, "commit", "-q", "--amend", "-m", "rewritten")
+    rewritten = git(d, "rev-parse", "HEAD").stdout.strip()
+    log = tmp_path / "override.log"
+    run_hook(d, "refs/heads/main %s refs/heads/main %s\n" % (rewritten, first),
+             env={"IOC_GUARD": "off", "IOC_GUARD_LOG": str(log)})
+    text = log.read_text()
+    assert "refs/heads/main" in text
+    assert rewritten in text
