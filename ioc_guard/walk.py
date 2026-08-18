@@ -23,6 +23,12 @@ SELF_EXEMPT_PATHS = frozenset({
     os.path.join("ioc_guard", "heuristics.py"),
 })
 
+# Note for contributors: prose under ioc_guard/ is scanned by
+# test_scanner_does_not_flag_its_own_source. A comment, docstring or help
+# string that contains the campaign marker, or that names both terms of the
+# hidden-spawn heuristic in one file, will fail that test. Reword the prose --
+# do not weaken a pattern in iocs.txt and do not add entries here.
+
 
 def is_excluded(relpath: str) -> bool:
     parts = relpath.replace(os.sep, "/").split("/")

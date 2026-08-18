@@ -23,11 +23,25 @@ def _git_show(root: str, ref: str, path: str) -> bytes:
     return proc.stdout if proc.returncode == 0 else b""
 
 
+def _require_ref(root: str, ref: str) -> bool:
+    """True if `ref` resolves to a commit in `root`.
+
+    A base ref that silently resolves to nothing would disable the
+    .gitignore and CRLF rules with no signal at all -- the scan would
+    report clean while two of its rules never ran.
+    """
+    proc = subprocess.run(
+        ["git", "-C", root, "rev-parse", "--verify", "--quiet", ref + "^{commit}"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return proc.returncode == 0
+
+
 def _changed_paths(root: str, base_ref: str) -> List[str]:
     proc = subprocess.run(["git", "-C", root, "diff", "--name-only", base_ref, "HEAD"],
-                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if proc.returncode != 0:
-        return []
+        raise RuntimeError("git diff against %s failed: %s"
+                           % (base_ref, proc.stderr.decode("utf-8", "replace").strip()))
     return [p for p in proc.stdout.decode("utf-8", "replace").splitlines() if p]
 
 
@@ -78,6 +92,13 @@ def main(argv=None) -> int:
         sys.stderr.write("ioc-guard: ERROR: not a directory: %s\n" % root)
         return EXIT_ERROR
 
+    if args.base_ref and not _require_ref(root, args.base_ref):
+        sys.stderr.write(
+            "ioc-guard: ERROR: cannot resolve --base-ref %r in %s.\n"
+            "  Refusing to report a scan whose diff rules never ran.\n"
+            % (args.base_ref, root))
+        return EXIT_ERROR
+
     findings = []
     try:
         for relpath, text in iter_files(root):
@@ -91,12 +112,23 @@ def main(argv=None) -> int:
 
     findings = sorted(set(findings), key=lambda f: (f.path, f.line, f.rule))
 
+    if args.json_out:
+        try:
+            pathlib.Path(args.json_out).write_text(render_json(findings), encoding="utf-8")
+        except OSError as exc:
+            sys.stderr.write("ioc-guard: ERROR: cannot write --json %s: %s\n"
+                             % (args.json_out, exc))
+            return EXIT_ERROR
+    if args.summary:
+        try:
+            with open(args.summary, "a", encoding="utf-8") as fh:
+                fh.write(render_markdown(findings))
+        except OSError as exc:
+            sys.stderr.write("ioc-guard: ERROR: cannot write --summary %s: %s\n"
+                             % (args.summary, exc))
+            return EXIT_ERROR
+
     if not args.quiet:
         sys.stdout.write(render_text(findings))
-    if args.json_out:
-        pathlib.Path(args.json_out).write_text(render_json(findings), encoding="utf-8")
-    if args.summary:
-        with open(args.summary, "a", encoding="utf-8") as fh:
-            fh.write(render_markdown(findings))
 
     return EXIT_FINDINGS if findings else EXIT_CLEAN
