@@ -11,7 +11,7 @@ from .gitdiff import compare_file
 from .heuristics import run_heuristics
 from .patterns import load_patterns, scan_text
 from .report import render_json, render_markdown, render_text
-from .walk import is_excluded, iter_files
+from .walk import ScanStats, is_excluded, iter_files
 
 EXIT_CLEAN, EXIT_FINDINGS, EXIT_ERROR = 0, 1, 2
 DEFAULT_IOCS = pathlib.Path(__file__).resolve().parent.parent / "iocs.txt"
@@ -100,8 +100,9 @@ def main(argv=None) -> int:
         return EXIT_ERROR
 
     findings = []
+    stats = ScanStats()
     try:
-        for relpath, text in iter_files(root):
+        for relpath, text in iter_files(root, stats):
             findings.extend(scan_text(text, patterns, relpath))
             findings.extend(run_heuristics(text, relpath))
         if args.base_ref:
@@ -109,6 +110,12 @@ def main(argv=None) -> int:
     except Exception as exc:
         sys.stderr.write("ioc-guard: ERROR: scan failed: %s\n" % exc)
         return EXIT_ERROR
+
+    # A file the walk never opened is not a clean file. Report the gap on
+    # stderr so it survives --quiet and shows up in CI logs and hook output.
+    if stats.skipped:
+        sys.stderr.write("ioc-guard: skipped %d file(s) (binary, >8MB, symlink or unreadable)\n"
+                         % stats.skipped)
 
     findings = sorted(set(findings), key=lambda f: (f.path, f.line, f.rule))
 

@@ -116,3 +116,54 @@ def test_infected_fixture_is_detected():
 def test_clean_fixture_passes():
     r = run(["--root", str(REPO / "tests" / "fixtures" / "clean")])
     assert r.returncode == 0, r.stdout
+
+
+def test_a_nul_byte_no_longer_hides_a_payload(tmp_path):
+    # C3 regression, exactly as reproduced: two extra bytes used to turn
+    # "1 finding" into "clean — no indicators found." with no skipped line.
+    (tmp_path / "eslint.config.js").write_bytes(
+        b'/*\x00*/\nmodule.exports={};\nglobal.i="A9-1800-1";\n')
+    r = run(["--root", str(tmp_path)])
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "A9-1800-1" in r.stdout
+    assert "heuristic:nul-in-source" in r.stdout
+
+
+def test_skipped_files_are_reported_rather_than_hidden(tmp_path):
+    (tmp_path / "logo.png").write_bytes(b"\x89PNG\x00\x00binary")
+    (tmp_path / "a.js").write_text("module.exports={};\n")
+    r = run(["--root", str(tmp_path)])
+    assert r.returncode == 0
+    assert "skipped 1 file(s)" in r.stderr, r.stderr
+
+
+def test_nothing_skipped_prints_no_skipped_line(tmp_path):
+    (tmp_path / "a.js").write_text("module.exports={};\n")
+    r = run(["--root", str(tmp_path)])
+    assert "skipped" not in r.stderr
+
+
+def test_a_payload_below_a_nested_build_directory_is_scanned(tmp_path):
+    # I7 regression: `build` matched at any depth, so this was skipped silently.
+    nested = tmp_path / "packages" / "app" / "build"
+    nested.mkdir(parents=True)
+    (nested / "webpack.config.js").write_text('global.i="A9-1800-1";\n')
+    r = run(["--root", str(tmp_path)])
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "webpack.config.js" in r.stdout
+
+
+def test_a_payload_repacked_into_a_minified_bundle_is_still_caught(tmp_path):
+    # I7 regression: *.min.js was skipped entirely.
+    (tmp_path / "payload.min.js").write_text("!function(){}();global.i=\"A9-1800-1\";\n")
+    r = run(["--root", str(tmp_path)])
+    assert r.returncode == 1, r.stdout + r.stderr
+
+
+def test_an_svg_and_a_long_readme_do_not_fail_a_clean_repo(tmp_path):
+    # I1 regression: these produced a permanently red required check.
+    (tmp_path / "logo.svg").write_text('<svg><path d="M36.78%s"/></svg>\n' % ("1.5 2.5 " * 500))
+    (tmp_path / "CLAUDE.md").write_text("prose " * 900 + "\n")
+    (tmp_path / "index.html").write_text("<div>%s</div>\n" % ("x" * 6000))
+    r = run(["--root", str(tmp_path)])
+    assert r.returncode == 0, r.stdout + r.stderr
