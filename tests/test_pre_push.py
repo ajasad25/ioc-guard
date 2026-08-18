@@ -129,3 +129,168 @@ def test_override_log_records_the_ref_and_shas(tmp_path):
     text = log.read_text()
     assert "refs/heads/main" in text
     assert rewritten in text
+
+
+def remove(d, filename):
+    git(d, "rm", "-q", filename)
+    git(d, "commit", "-q", "-m", "remove")
+    return git(d, "rev-parse", "HEAD").stdout.strip()
+
+
+# --- I8: a payload that erases itself before the tip must still be caught ---
+
+def test_a_payload_in_an_intermediate_commit_is_caught(tmp_path):
+    # INCIDENT-REPORT.md: the payload "rewrote itself out of the working tree
+    # after running, to hide". A tip-only scan reported this clean.
+    d = make_repo(tmp_path, "selferase")
+    first = commit(d, "a.js", "module.exports={};\n")
+    commit(d, "eslint.config.js", 'global.i="A9-1800-1";\n')
+    tip = remove(d, "eslint.config.js")
+
+    r = run_hook(d, "refs/heads/main %s refs/heads/main %s\n" % (tip, first))
+    assert r.returncode != 0, "a self-erasing payload must not pass:\n" + r.stdout + r.stderr
+    assert "A9-1800-1" in (r.stdout + r.stderr)
+
+
+def test_a_payload_edited_out_again_is_caught(tmp_path):
+    d = make_repo(tmp_path, "editedout")
+    first = commit(d, "eslint.config.js", "module.exports={};\n")
+    commit(d, "eslint.config.js", 'module.exports={};\nglobal.i="A9-1800-1";\n')
+    tip = commit(d, "eslint.config.js", "module.exports={};\n")
+
+    r = run_hook(d, "refs/heads/main %s refs/heads/main %s\n" % (tip, first))
+    assert r.returncode != 0, r.stdout + r.stderr
+
+
+def test_a_clean_multi_commit_range_is_still_allowed(tmp_path):
+    d = make_repo(tmp_path, "multiclean")
+    first = commit(d, "a.js", "module.exports={};\n")
+    commit(d, "b.js", "console.log(1);\n")
+    commit(d, "c.js", "console.log(2);\n")
+    tip = commit(d, "d.js", "console.log(3);\n")
+    r = run_hook(d, "refs/heads/main %s refs/heads/main %s\n" % (tip, first))
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_a_long_range_is_capped_and_the_truncation_is_announced(tmp_path):
+    d = make_repo(tmp_path, "capped")
+    first = commit(d, "a.js", "module.exports={};\n")
+    for i in range(4):
+        commit(d, "f%d.js" % i, "console.log(%d);\n" % i)
+    tip = git(d, "rev-parse", "HEAD").stdout.strip()
+
+    r = run_hook(d, "refs/heads/main %s refs/heads/main %s\n" % (tip, first),
+                 env={"IOC_GUARD_MAX_COMMITS": "2"})
+    out = r.stdout + r.stderr
+    assert "WARNING" in out and "NOT scanned" in out, out
+    assert "4 commits" in out, out
+    assert r.returncode == 0, out
+
+
+def test_a_merge_commit_range_is_scanned(tmp_path):
+    d = make_repo(tmp_path, "merge")
+    first = commit(d, "a.js", "module.exports={};\n")
+    git(d, "checkout", "-q", "-b", "side")
+    commit(d, "eslint.config.js", 'global.i="A9-1800-1";\n')
+    git(d, "checkout", "-q", "main")
+    commit(d, "b.js", "console.log(1);\n")
+    git(d, "merge", "-q", "--no-ff", "-m", "merge", "side")
+    tip = git(d, "rev-parse", "HEAD").stdout.strip()
+
+    r = run_hook(d, "refs/heads/main %s refs/heads/main %s\n" % (tip, first))
+    assert r.returncode != 0, r.stdout + r.stderr
+
+
+# --- I6: publishing an indicator update must not need the nuclear override ---
+
+def test_skip_scan_allows_an_indicator_update_through(tmp_path):
+    d = make_repo(tmp_path, "iocupdate")
+    first = commit(d, "a.js", "module.exports={};\n")
+    second = commit(d, "iocs.txt", "A9-1800-1\nhelloipbot\n")
+
+    blocked = run_hook(d, "refs/heads/main %s refs/heads/main %s\n" % (second, first))
+    assert blocked.returncode != 0, "sanity: this is blocked without the flag"
+
+    r = run_hook(d, "refs/heads/main %s refs/heads/main %s\n" % (second, first),
+                 env={"IOC_GUARD_SKIP_SCAN": "1"})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "content scan skipped" in (r.stdout + r.stderr)
+
+
+def test_skip_scan_still_blocks_a_force_push(tmp_path):
+    d = make_repo(tmp_path, "skipforce")
+    first = commit(d, "a.js", "module.exports={};\n")
+    git(d, "commit", "-q", "--amend", "-m", "rewritten")
+    rewritten = git(d, "rev-parse", "HEAD").stdout.strip()
+    r = run_hook(d, "refs/heads/main %s refs/heads/main %s\n" % (rewritten, first),
+                 env={"IOC_GUARD_SKIP_SCAN": "1"})
+    assert r.returncode != 0, "skipping the scan must not disable the force-push block"
+    assert "non-fast-forward" in (r.stdout + r.stderr).lower()
+
+
+def test_skip_scan_still_blocks_a_branch_deletion(tmp_path):
+    d = make_repo(tmp_path, "skipdel")
+    sha = commit(d, "a.js", "x\n")
+    r = run_hook(d, "(delete) %s refs/heads/main %s\n" % (ZERO, sha),
+                 env={"IOC_GUARD_SKIP_SCAN": "1"})
+    assert r.returncode != 0
+    assert "deletion" in (r.stdout + r.stderr).lower()
+
+
+# --- I3: the rules aimed at the incident's real damage now run in the hook ---
+
+def test_stripping_the_env_rule_from_gitignore_is_blocked(tmp_path):
+    d = make_repo(tmp_path, "envrule")
+    (d / ".gitignore").write_text("node_modules\n.env\n")
+    git(d, "add", "-A")
+    git(d, "commit", "-q", "-m", "base")
+    first = git(d, "rev-parse", "HEAD").stdout.strip()
+    (d / ".gitignore").write_text("node_modules\n")
+    git(d, "add", "-A")
+    git(d, "commit", "-q", "-m", "strip env rule")
+    tip = git(d, "rev-parse", "HEAD").stdout.strip()
+
+    r = run_hook(d, "refs/heads/main %s refs/heads/main %s\n" % (tip, first))
+    assert r.returncode != 0, r.stdout + r.stderr
+    assert "gitignore-lost-env" in (r.stdout + r.stderr)
+
+
+def test_deleting_gitignore_is_blocked_by_the_hook(tmp_path):
+    d = make_repo(tmp_path, "envdelete")
+    (d / ".gitignore").write_text("node_modules\n.env\n")
+    (d / "a.js").write_text("module.exports={};\n")
+    git(d, "add", "-A")
+    git(d, "commit", "-q", "-m", "base")
+    first = git(d, "rev-parse", "HEAD").stdout.strip()
+    git(d, "rm", "-q", ".gitignore")
+    git(d, "commit", "-q", "-m", "drop gitignore")
+    tip = git(d, "rev-parse", "HEAD").stdout.strip()
+
+    r = run_hook(d, "refs/heads/main %s refs/heads/main %s\n" % (tip, first))
+    assert r.returncode != 0, r.stdout + r.stderr
+    assert "gitignore-lost-env" in (r.stdout + r.stderr)
+
+
+def test_a_wholesale_crlf_flip_is_blocked(tmp_path):
+    d = make_repo(tmp_path, "crlf")
+    body = "\n".join("line %d" % i for i in range(200)) + "\n"
+    (d / "app.js").write_text(body)
+    git(d, "add", "-A")
+    git(d, "commit", "-q", "-m", "base")
+    first = git(d, "rev-parse", "HEAD").stdout.strip()
+    (d / "app.js").write_bytes(body.replace("\n", "\r\n").encode())
+    git(d, "add", "-A")
+    git(d, "commit", "-q", "-m", "crlf")
+    tip = git(d, "rev-parse", "HEAD").stdout.strip()
+
+    r = run_hook(d, "refs/heads/main %s refs/heads/main %s\n" % (tip, first))
+    assert r.returncode != 0, r.stdout + r.stderr
+    assert "crlf-flip" in (r.stdout + r.stderr)
+
+
+def test_a_missing_engine_is_an_operational_error_not_a_block(tmp_path):
+    d = make_repo(tmp_path, "noengine")
+    sha = commit(d, "a.js", "module.exports={};\n")
+    r = run_hook(d, "refs/heads/feat %s refs/heads/feat %s\n" % (sha, ZERO),
+                 env={"IOC_GUARD_ENGINE": str(tmp_path / "nowhere")})
+    assert r.returncode == 2, "a broken install must not look like findings or a pass"
