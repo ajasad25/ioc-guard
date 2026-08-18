@@ -15,7 +15,7 @@ SELF_EXEMPT_MARKER = b"ioc-guard" + b":self-exempt"
 
 # Only these two engine files may self-exempt. Both necessarily contain
 # indicator strings: iocs.txt holds every literal pattern, and heuristics.py
-# names child_process/windowsHide in its own rule definitions. An allowlist
+# defines the terms used by the hidden-process-spawn heuristic. An allowlist
 # rather than a directory prefix, so that a repository nested inside the
 # engine's own checkout can never exempt itself.
 SELF_EXEMPT_PATHS = frozenset({
