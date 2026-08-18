@@ -47,15 +47,16 @@ jobs:
             $BASE_ARGS
           rc=$?
           set -e
-          if [ "$rc" = "2" ]; then
-            echo "::error::ioc-guard failed to run. This is NOT a clean result."
-            exit 2
+          if [ "$rc" = "0" ]; then
+            echo "ioc-guard: clean"
+            exit 0
           fi
           if [ "$rc" = "1" ]; then
             echo "::error::ioc-guard found indicators of compromise. Do not merge."
             exit 1
           fi
-          echo "ioc-guard: clean"
+          echo "::error::ioc-guard did not complete (exit $rc). This is NOT a clean result."
+          exit "$rc"
 
       - name: Upload report
         if: always()
