@@ -1,0 +1,43 @@
+# ioc-guard literal indicators — one Python regex per line, matched case-insensitively.
+# Blank lines and lines starting with # are ignored.
+# Source: INCIDENT-REPORT.md, campaign A9-1800-1 (EtherHiding / Shai-Hulud family).
+# ioc-guard:self-exempt
+#
+# NEVER add the Ethereum address in 0x-prefixed form. The payload stores it as
+# \u00.. escape sequences, so a 0x-search returns a false clean on infected files.
+# The bare hex below is the correct form.
+
+# --- campaign markers ---
+A9-1800-1
+helloipbot
+_\$_1e42
+config\.bat
+
+# --- C2 endpoints and paths ---
+0x/cls
+0x/ls
+166\.88\.134\.62
+
+# --- wallet / dead drops ---
+a322e5f3d311d3080e6f0121063e9adc2490ef1a
+TMfKQEd7TJJa5xNZJZ2Lep838vrzrs7mAP
+TXfxHUet9pJVU1BgVkBAbrES4YUc1nGzcG
+
+# --- blockchain RPC used to fetch the second stage ---
+eth_getBlockByNumber
+eth_getTransactionCount
+eth\.blockscout\.com
+ethereum-rpc\.publicnode\.com
+eth\.drpc\.org
+bsc-dataseed\.binance\.org
+bsc-rpc\.publicnode\.com
+api\.trongrid\.io
+fullnode\.mainnet\.aptoslabs\.com
+
+# --- loader runtime shape ---
+global\s*\[\s*['"]r['"]\s*\]\s*=\s*require
+global\.i\s*=\s*['"]A9-
+
+# --- XOR keys ---
+2\[gWfGj;<:-93Z\^C
+m6:tTh\^D\)cBz\?NM\]
