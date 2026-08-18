@@ -1,4 +1,5 @@
 """Rules that need the base revision of a file to see the damage."""
+import os
 import re
 from typing import List
 
@@ -6,7 +7,7 @@ from .finding import Finding
 
 MIN_LINES_FOR_CRLF_RULE = 50
 CRLF_FLIP_RATIO = 0.9
-_ENV_RULE = re.compile(rb"^\s*!?\**\.env", re.MULTILINE)
+_ENV_RULE = re.compile(rb"^\s*(?!!)(?:\*\*/|\*|/)*\.env", re.MULTILINE)
 
 
 def _crlf_ratio(data: bytes) -> float:
@@ -19,7 +20,7 @@ def _crlf_ratio(data: bytes) -> float:
 def compare_file(path: str, base: bytes, head: bytes) -> List[Finding]:
     findings = []
 
-    if path.endswith(".gitignore") and base:
+    if os.path.basename(path) == ".gitignore" and base:
         if _ENV_RULE.search(base) and not _ENV_RULE.search(head):
             findings.append(Finding(path=path, line=0,
                                     rule="diff:gitignore-lost-env",

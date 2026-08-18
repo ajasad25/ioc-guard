@@ -46,3 +46,23 @@ def test_content_edit_without_line_ending_change_is_not_flagged():
     base = b"\n".join(b"line %d" % i for i in range(200)) + b"\n"
     head = base.replace(b"line 5", b"line five")
     assert compare_file("src/app.js", base, head) == []
+
+
+def test_deleting_a_negation_line_is_not_flagged_as_lost_protection():
+    # "!.env.example" un-ignores a file; it is not a protective rule.
+    assert compare_file(".gitignore", b"!.env.example\n", b"") == []
+
+
+def test_env_rule_stripped_while_a_negation_line_remains_is_still_flagged():
+    # The worm strips the real .env rule; a leftover negation must not mask it.
+    base = b".env\n!.env.example\nnode_modules\n"
+    head = b"!.env.example\nnode_modules\n"
+    assert "diff:gitignore-lost-env" in {f.rule for f in compare_file(".gitignore", base, head)}
+
+
+def test_double_star_env_rule_is_recognised():
+    assert "diff:gitignore-lost-env" in {f.rule for f in compare_file(".gitignore", b"**/.env\n", b"")}
+
+
+def test_a_file_merely_named_like_gitignore_is_not_treated_as_one():
+    assert compare_file("backup.gitignore", b".env\n", b"") == []
