@@ -5,6 +5,11 @@ from typing import List
 
 from .finding import Finding
 
+# GitHub rejects or truncates a $GITHUB_STEP_SUMMARY over 1 MiB. One local repo
+# produced 6584 findings, which at ~250 bytes a row is ~1.6 MB -- the summary
+# would have been lost entirely. The JSON artifact still carries every finding.
+MAX_MARKDOWN_ROWS = 200
+
 
 def render_text(findings: List[Finding]) -> str:
     if not findings:
@@ -26,10 +31,14 @@ def render_markdown(findings: List[Finding]) -> str:
             % len(findings),
             "| File | Line | Rule | Detail |",
             "|---|---|---|---|"]
-    for f in findings:
+    for f in findings[:MAX_MARKDOWN_ROWS]:
         rows.append("| `%s` | %d | `%s` | %s |"
                     % (_md_escape(f.path), f.line, _md_escape(f.rule),
                        _md_escape(f.excerpt)[:200]))
+    extra = len(findings) - MAX_MARKDOWN_ROWS
+    if extra > 0:
+        rows.append("")
+        rows.append("_…and %d more — see the uploaded ioc-report.json artifact._" % extra)
     return "\n".join(rows) + "\n"
 
 
