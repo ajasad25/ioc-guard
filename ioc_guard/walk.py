@@ -7,8 +7,21 @@ EXCLUDED_DIRS = (".git", "node_modules", "dist", "build", ".next",
 EXCLUDED_SUFFIXES = (".min.js", ".min.css", ".map")
 MAX_BYTES = 8 * 1024 * 1024
 
-ENGINE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ENGINE_ROOT = os.path.realpath(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SELF_EXEMPT_MARKER = b"ioc-guard" + b":self-exempt"
+# The literal above is split so that walk.py's own source does not contain the
+# contiguous marker — otherwise this file would exempt itself.
+
+# Only these two engine files may self-exempt. Both necessarily contain
+# indicator strings: iocs.txt holds every literal pattern, and heuristics.py
+# names child_process/windowsHide in its own rule definitions. An allowlist
+# rather than a directory prefix, so that a repository nested inside the
+# engine's own checkout can never exempt itself.
+SELF_EXEMPT_PATHS = frozenset({
+    "iocs.txt",
+    os.path.join("ioc_guard", "heuristics.py"),
+})
 
 
 def is_excluded(relpath: str) -> bool:
@@ -23,13 +36,19 @@ def _looks_binary(data: bytes) -> bool:
 
 
 def _is_engine_self_exempt(fullpath, data):
-    """True only for ioc-guard's own files that carry the marker.
+    """True only for one of ioc-guard's own marked files.
 
-    Scoped to the engine's own directory: the marker is inert inside a
-    scanned repository, so it cannot be used to evade detection.
+    Requires both that the file IS an allowlisted engine file and that it
+    carries the marker. The marker alone exempts nothing, anywhere.
     """
-    resolved = os.path.abspath(fullpath)
-    if resolved != ENGINE_ROOT and not resolved.startswith(ENGINE_ROOT + os.sep):
+    resolved = os.path.realpath(fullpath)
+    try:
+        rel = os.path.relpath(resolved, ENGINE_ROOT)
+    except ValueError:          # different drive on Windows
+        return False
+    if rel.startswith(os.pardir):
+        return False
+    if rel not in SELF_EXEMPT_PATHS:
         return False
     return SELF_EXEMPT_MARKER in data[:4096]
 

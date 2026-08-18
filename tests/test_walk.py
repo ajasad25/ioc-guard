@@ -49,7 +49,48 @@ def test_engine_files_carrying_the_marker_are_skipped():
 
 def test_the_marker_does_not_exempt_a_file_in_a_scanned_repo(tmp_path):
     # An attacker must not be able to evade the scanner by pasting the marker.
+    marker = "ioc-guard" + ":self-exempt"      # split so this file is not itself marked
     (tmp_path / "evil.js").write_text(
-        "// ioc-guard:self-exempt\nglobal.i='A9-1800-1';\n")
+        "// %s\nglobal.i='A9-1800-1';\n" % marker)
     got = dict(iter_files(tmp_path))
-    assert "evil.js" in got, "the marker is inert outside the engine's own directory"
+    assert "evil.js" in got, "the marker is inert outside the engine's allowlist"
+
+
+def test_a_repo_nested_inside_the_engine_cannot_self_exempt():
+    # The evasion path: a scanned repo living under the engine's own checkout.
+    import pathlib
+    import shutil
+
+    import ioc_guard
+
+    engine = pathlib.Path(ioc_guard.__file__).resolve().parent.parent
+    nested = engine / "_nested_target_fixture"
+    nested.mkdir(exist_ok=True)
+    try:
+        marker = "ioc-guard" + ":self-exempt"
+        (nested / "evil.js").write_text("// %s\nglobal.i='A9-1800-1';\n" % marker)
+        got = dict(iter_files(nested))
+        assert "evil.js" in got, "a nested repo must never inherit the engine's exemption"
+    finally:
+        shutil.rmtree(nested)
+
+
+def test_test_files_are_not_self_exempted():
+    import pathlib
+
+    import ioc_guard
+
+    engine = pathlib.Path(ioc_guard.__file__).resolve().parent.parent
+    got = dict(iter_files(engine))
+    assert "tests/test_walk.py" in got, "only allowlisted engine files may self-exempt"
+
+
+def test_an_unlisted_engine_file_with_the_marker_is_still_scanned(tmp_path, monkeypatch):
+    # Belt and braces: the marker alone must not be sufficient, even inside the engine.
+    import ioc_guard.walk as walk
+
+    monkeypatch.setattr(walk, "ENGINE_ROOT", str(tmp_path))
+    marker = "ioc-guard" + ":self-exempt"
+    (tmp_path / "not_allowlisted.py").write_text("# %s\n" % marker)
+    got = dict(walk.iter_files(tmp_path))
+    assert "not_allowlisted.py" in got
