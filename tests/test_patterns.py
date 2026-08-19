@@ -82,3 +82,23 @@ def test_every_pattern_in_the_file_compiles_and_none_is_empty():
     assert len(pats) >= 20
     assert all(label.strip() for label, _ in pats)
     assert all(rx.search("") is None for _, rx in pats), "no pattern may match empty text"
+
+
+# --- config.bat must not match config.batch ---
+
+def test_config_bat_matches_the_gitignore_artifact():
+    pats = load_patterns(IOCS)
+    for body in ("config.bat", "config.bat\n", "/config.bat", "**/config.bat",
+                 "config.bat.old"):
+        assert scan_text(body, pats, ".gitignore"), body
+
+
+def test_config_bat_does_not_match_config_batch():
+    # Measured false positive in two real repos: `config.batch` in Rust source
+    # and in a markdown file. Every true positive is the bare filename.
+    pats = load_patterns(IOCS)
+    for body in ("    let status = if config.batch {",
+                 '"--batch" => config.batch = true,',
+                 "see config.batching for details",
+                 "config.battery"):
+        assert scan_text(body, pats, "src/main.rs") == [], body

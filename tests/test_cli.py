@@ -357,3 +357,72 @@ def test_the_skipped_line_names_the_files(tmp_path):
     r = run(["--root", str(tmp_path)])
     assert "skipped 1 file(s)" in r.stderr
     assert "logo.png" in r.stderr, r.stderr
+
+
+# --- FP2/FP3: committed virtualenvs and generated client code ---
+
+def test_a_committed_virtualenv_produces_no_findings(tmp_path):
+    sp = (tmp_path / "backend" / "venv" / "lib" / "python3.12"
+          / "site-packages" / "google" / "protobuf")
+    sp.mkdir(parents=True)
+    (sp / "descriptor_pb2.py").write_text(
+        '_sym_db = 1\n"inlineSchema": "%s"\n' % ("A" * 19160))
+    r = run(["--root", str(tmp_path)])
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_committed_generated_client_code_produces_no_findings(tmp_path):
+    gen = tmp_path / "generated" / "prisma"
+    gen.mkdir(parents=True)
+    (gen / "edge.js").write_text('  "inlineSchema": "generator %s"\n' % ("c" * 15629))
+    r = run(["--root", str(tmp_path)])
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_a_payload_inside_a_committed_virtualenv_is_still_caught(tmp_path):
+    # The point of waiving density rather than excluding: a compromised PyPI
+    # release lands here, and that is the shape of this whole campaign.
+    sp = tmp_path / "venv" / "lib" / "python3.12" / "site-packages" / "evil"
+    sp.mkdir(parents=True)
+    (sp / "hook.py").write_text('MARKER = "A9-1800-1"\n')
+    (sp / "postinstall.js").write_text("global['!']='9-1800';\n")
+    r = run(["--root", str(tmp_path)])
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "A9-1800-1" in r.stdout
+    assert "hook.py" in r.stdout and "postinstall.js" in r.stdout
+
+
+def test_a_payload_inside_generated_client_code_is_still_caught(tmp_path):
+    gen = tmp_path / "generated" / "prisma"
+    gen.mkdir(parents=True)
+    (gen / "edge.js").write_text(
+        'const cp=require("child_process");\n'
+        "cp.spawn(x,y,{windowsHide:true});\n"
+        'global.i="A9-1800-1";\n')
+    r = run(["--root", str(tmp_path)])
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "A9-1800-1" in r.stdout
+    assert "heuristic:spawn-hidden-window" in r.stdout
+
+
+def test_a_nul_inside_a_vendored_tree_is_still_reported(tmp_path):
+    sp = tmp_path / ".venv" / "lib" / "site-packages"
+    sp.mkdir(parents=True)
+    (sp / "mod.py").write_bytes(b"import os\x00\n")
+    r = run(["--root", str(tmp_path)])
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "heuristic:nul-in-source" in r.stdout
+
+
+def test_the_gitignore_artifact_still_fires(tmp_path):
+    (tmp_path / ".gitignore").write_text("node_modules\ndist\nconfig.bat\n")
+    r = run(["--root", str(tmp_path)])
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "ioc:config" in r.stdout
+
+
+def test_config_batch_in_source_no_longer_fires(tmp_path):
+    (tmp_path / "main.rs").write_text('    let status = if config.batch {\n')
+    (tmp_path / "SKILL.md").write_text("Set config.batch to true.\n")
+    r = run(["--root", str(tmp_path)])
+    assert r.returncode == 0, r.stdout + r.stderr

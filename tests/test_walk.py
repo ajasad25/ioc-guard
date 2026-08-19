@@ -257,3 +257,38 @@ def test_the_named_skip_list_is_bounded(tmp_path):
     assert stats.skipped == ScanStats.MAX_NAMED + 7
     assert len(stats.names) == ScanStats.MAX_NAMED
     assert "...and 7 more not listed" in stats.describe()[-1]
+
+
+# --- vendored and generated trees: walked for literals, density waived ---
+
+VENDORED = ("backend/venv/lib/python3.12/site-packages/google/protobuf/descriptor_pb2.py",
+            ".venv/lib/python3.11/site-packages/grpc/_channel.py",
+            "env/lib/python3.9/site-packages/pkg/mod.py",
+            "generated/prisma/edge.js",
+            "src/generated/client/index.js")
+
+
+def test_vendored_and_generated_trees_are_walked_not_excluded():
+    # Every exclusion is a hiding place, and this scanner's exclusion list is
+    # public. These are noisy, not untrustworthy -- a compromised PyPI or npm
+    # release lands in exactly these trees.
+    for p in VENDORED:
+        assert not is_excluded(p), p
+
+
+def test_vendored_and_generated_trees_have_the_density_rules_waived():
+    for p in VENDORED:
+        assert not allows_density_heuristics(p), p
+
+
+def test_a_directory_merely_containing_the_word_generated_is_unaffected():
+    assert not is_excluded("src/generated-by-hand/app.js")
+    assert allows_density_heuristics("src/generated-by-hand/app.js")
+
+
+def test_a_committed_virtualenv_is_still_read(tmp_path):
+    sp = tmp_path / "backend" / "venv" / "lib" / "python3.12" / "site-packages" / "google"
+    sp.mkdir(parents=True)
+    (sp / "descriptor_pb2.py").write_text("x = '" + "y" * 19000 + "'\n")
+    got = dict(iter_files(tmp_path))
+    assert "backend/venv/lib/python3.12/site-packages/google/descriptor_pb2.py" in got

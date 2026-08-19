@@ -11,7 +11,7 @@
 A9-1800-1
 helloipbot
 _\$_1e42
-config\.bat
+config\.bat\b
 
 # --- C2 endpoints and paths ---
 0x/cls

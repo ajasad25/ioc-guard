@@ -18,7 +18,12 @@ EXCLUDED_DIRS_ANY_DEPTH = (".git", "node_modules", "vendor",
 # needed no nesting at all, and `build/webpack.base.conf.js` is checked-in
 # source in the standard Vue-CLI 2 layout. Those directories are walked and
 # matched against the literal indicators like anything else; only the
-# length/density heuristics are waived, through BUILD_OUTPUT_DIRS below.
+# length/density heuristics are waived, through DENSITY_WAIVED_DIRS below.
+#
+# Nothing else has been added here. Committed virtualenvs and generated client
+# code are noisy, but noise is a reason to waive a heuristic, not a reason to
+# stop looking at a file: a compromised PyPI or npm package lands in exactly
+# those trees, and this scanner exists for supply-chain compromise.
 EXCLUDED_DIRS_TOP_LEVEL = (".ioc-guard",)
 
 # Kept as a union for callers that only ask "is this name a build directory".
@@ -55,14 +60,26 @@ SOURCE_SUFFIXES = (
 SOURCE_BASENAMES = ("dockerfile", "makefile", "gnumakefile", "procfile",
                     ".gitignore", ".npmrc", ".babelrc", ".eslintrc")
 
-# Generated bundles live here, at any depth including the top level. They are
+# Generated and vendored trees, at any depth including the top level. They are
 # walked and matched against the literal indicators -- that is what closes the
-# hiding place -- but a bundle trips the length/density rules by construction:
-# one local checkout produced 35 long-line hits from web/dist and server/dist
-# with zero true positives. So only the density heuristics are waived, exactly
-# the treatment I7 prescribes for *.min.js. space-padding, spawn-hidden-window
-# and nul-in-source still run here.
-BUILD_OUTPUT_DIRS = ("dist", "build", "coverage", ".next")
+# hiding place -- but they trip the length/density rules by construction: one
+# local checkout produced 35 long-line hits from web/dist and server/dist with
+# zero true positives, and a committed virtualenv trips it on generated
+# protobuf modules. So only the density heuristics are waived here, exactly the
+# treatment *.min.js gets. space-padding, spawn-hidden-window, nul-in-source
+# and every literal pattern still run.
+#
+# venv, .venv, site-packages and generated sit here rather than in
+# EXCLUDED_DIRS_ANY_DEPTH on purpose. A committed virtualenv is third-party
+# code that can genuinely carry a payload -- a compromised PyPI release lands
+# in site-packages, which is the whole shape of this campaign -- and a scanner
+# that stops looking there is blind exactly where supply-chain compromise
+# arrives. "generated" is also an ordinary English word that a repo may well
+# use for hand-written code. Waiving the density rules removes the measured
+# noise; excluding the trees would remove the detection with it, and this
+# scanner's exclusion list is public now.
+DENSITY_WAIVED_DIRS = ("dist", "build", "coverage", ".next",
+                       "venv", ".venv", "site-packages", "generated")
 
 # Data and markup formats where a >3000 char line or a run of escapes is
 # ordinary: SVG path data, generated HTML reports, prose, lockfiles, snapshots.
@@ -172,9 +189,9 @@ def is_source_like(relpath: str) -> bool:
     return base.endswith(SOURCE_SUFFIXES)
 
 
-def in_build_output(relpath: str) -> bool:
-    """True for a path under a build-output directory at any depth."""
-    return any(d in BUILD_OUTPUT_DIRS for d in _norm(relpath).split("/")[:-1])
+def in_density_waived_tree(relpath: str) -> bool:
+    """True for a path under a generated or vendored tree, at any depth."""
+    return any(d in DENSITY_WAIVED_DIRS for d in _norm(relpath).split("/")[:-1])
 
 
 def allows_density_heuristics(relpath: str) -> bool:
@@ -185,7 +202,7 @@ def allows_density_heuristics(relpath: str) -> bool:
     lines into a permanently red required check, which is how a control gets
     muted. The literal indicator patterns stay unscoped -- they are precise.
     """
-    if in_build_output(relpath):
+    if in_density_waived_tree(relpath):
         return False
     base = _basename(relpath).lower()
     if base.endswith(MINIFIED_SUFFIXES):
