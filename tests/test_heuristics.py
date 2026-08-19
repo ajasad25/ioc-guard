@@ -226,3 +226,53 @@ def test_heuristic_line_numbers_are_lf_based():
     body = "short\rshort\rshort\n" + "z" * 4000 + "\n"
     found = [f for f in run_heuristics(body, "app.js") if f.rule == "heuristic:long-line"]
     assert found and found[0].line == 2, [f.line for f in found]
+
+
+# -- minified bundles vs injected tails -----------------------------------
+# The length rule fired on two vendored bundles across 61 branches during the
+# 2026-08 cleanup. These pin the shape that distinguishes them from a payload.
+
+def _injected(body_lines, pad=507):
+    """A normal file that gains one padded, oversized line -- the worm shape."""
+    head = "\n".join("  key%d: 'value%d'," % (i, i) for i in range(body_lines))
+    return head + "\n};" + " " * pad + "x" * 9000 + "\n"
+
+
+def _bundle(n=6000):
+    """A webpack-style UMD bundle: long from byte 0, no padding."""
+    return "!function(e,r){%s}(self,function(){return 1});\n" % ("a=b;" * n)
+
+
+def test_long_line_does_not_fire_on_a_minified_bundle():
+    assert "heuristic:long-line" not in rules(run_heuristics(_bundle(), "vendor/chart.js"))
+
+
+def test_long_line_still_fires_on_an_injected_tail():
+    got = rules(run_heuristics(_injected(88), "tailwind.config.js"))
+    assert "heuristic:long-line" in got, got
+
+
+def test_space_padding_still_fires_on_an_injected_tail():
+    assert "heuristic:space-padding" in rules(
+        run_heuristics(_injected(88), "tailwind.config.js"))
+
+
+def test_a_padded_payload_appended_to_a_bundle_is_not_exempted():
+    """The exemption must not become a hiding place: padding disqualifies it."""
+    body = _bundle().rstrip("\n") + "\n};" + " " * 507 + "y" * 9000 + "\n"
+    got = rules(run_heuristics(body, "vendor/chart.js"))
+    assert "heuristic:long-line" in got, got
+    assert "heuristic:space-padding" in got, got
+
+
+def test_bundle_exemption_does_not_suppress_literal_indicators():
+    """Only the length rule consults the bundle check."""
+    body = _bundle().rstrip("\n") + "\nrequire('child_process').spawn(x,{windowsHide:true});\n"
+    assert "heuristic:spawn-hidden-window" in rules(run_heuristics(body, "vendor/chart.js"))
+
+
+def test_a_config_with_one_long_line_but_normal_body_is_not_a_bundle():
+    """Low long-line byte share must keep the rule active even without padding."""
+    head = "\n".join("  key%d: 'value%d'," % (i, i) for i in range(400))
+    body = head + "\n" + "z" * 4000 + "\n"
+    assert "heuristic:long-line" in rules(run_heuristics(body, "eslint.config.js"))
