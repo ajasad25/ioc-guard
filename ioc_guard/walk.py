@@ -158,6 +158,23 @@ class ScanStats(object):
         return out
 
 
+def split_lines(text: str):
+    """Split on newlines the way git, grep and every editor do: LF only.
+
+    str.splitlines() also breaks on lone CR, form feed, \x0b, \x1c-\x1e,
+    \x85, \u2028 and \u2029. That cost us both ways. Line numbers drifted --
+    a real .gitignore with 47 lone CRs reported its indicator at line 95 when
+    git says 48, sending an operator to the wrong place. And the extra
+    separators are an evasion: JavaScript does not treat \x0c or \u2028-in-a-
+    string as a statement break, so an attacker could sprinkle them through a
+    long payload line, keep it one line for Node, and have every fragment fall
+    under the length threshold here. A trailing CR is dropped so CRLF files
+    still report clean excerpts and honest lengths.
+    """
+    return [line[:-1] if line.endswith("\r") else line
+            for line in text.split("\n")]
+
+
 def _norm(relpath: str) -> str:
     return str(relpath).replace(os.sep, "/")
 

@@ -102,3 +102,23 @@ def test_config_bat_does_not_match_config_batch():
                  "see config.batching for details",
                  "config.battery"):
         assert scan_text(body, pats, "src/main.rs") == [], body
+
+
+# --- line numbers must match git and grep, not str.splitlines() ---
+
+def test_line_numbers_match_git_on_a_file_with_lone_carriage_returns():
+    # Found in whatsapp-project's real .gitignore: 47 lone CRs, so
+    # str.splitlines() reported the indicator at line 95 where git says 48.
+    pats = load_patterns(IOCS)
+    text = "a\r\nb\rc\rd\r\n" + "filler\n" * 3 + "config.bat\n"
+    assert text.split("\n").index("config.bat") + 1 == 6
+    found = scan_text(text, pats, ".gitignore")
+    assert found and found[0].line == 6, [f.line for f in found]
+
+
+def test_crlf_line_endings_do_not_shift_line_numbers():
+    pats = load_patterns(IOCS)
+    text = "clean\r\nclean\r\nhelloipbot\r\n"
+    found = scan_text(text, pats, "a.js")
+    assert found[0].line == 3
+    assert "\r" not in found[0].excerpt

@@ -3,6 +3,7 @@ import re
 from typing import List, Pattern, Tuple
 
 from .finding import Finding
+from .walk import split_lines
 
 EXCERPT_RADIUS = 60
 
@@ -30,7 +31,7 @@ def _excerpt(line: str, start: int, end: int) -> str:
 
 def scan_text(text: str, patterns, path: str) -> List[Finding]:
     findings = []
-    for lineno, line in enumerate(text.splitlines(), 1):
+    for lineno, line in enumerate(split_lines(text), 1):
         for label, rx in patterns:
             m = rx.search(line)
             if m:

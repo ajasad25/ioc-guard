@@ -4,7 +4,7 @@ import re
 from typing import List
 
 from .finding import Finding
-from .walk import allows_density_heuristics, is_source_like
+from .walk import allows_density_heuristics, is_source_like, split_lines
 
 MAX_LINE_LEN = 3000
 MIN_UNICODE_ESCAPES = 40
@@ -37,7 +37,7 @@ def run_heuristics(text: str, path: str) -> List[Finding]:
     # Unscoped, their only measured hits were SVG path data, generated HTML and
     # long prose lines -- noise that turns the whole check red and gets it muted.
     dense = allows_density_heuristics(path)
-    lines = text.splitlines()
+    lines = split_lines(text)
 
     for lineno, line in enumerate(lines, 1):
         if dense and len(line) > MAX_LINE_LEN and not _SVG_PATH_LINE.match(line):

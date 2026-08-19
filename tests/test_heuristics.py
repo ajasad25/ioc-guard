@@ -198,3 +198,31 @@ def test_build_output_keeps_the_precise_rules_and_loses_only_density():
     assert "heuristic:spawn-hidden-window" in rules(run_heuristics(spawn, "dist/main.js"))
     assert "heuristic:nul-in-source" in rules(run_heuristics("a\x00b", "build/webpack.base.conf.js"))
     assert run_heuristics("x" * 9000, "build/webpack.base.conf.js") == []
+
+
+# --- exotic separators must not fragment a long line ---
+
+def test_form_feeds_cannot_fragment_a_long_line():
+    # JavaScript does not treat \x0c as a statement break, but
+    # str.splitlines() does -- so sprinkling them through a payload would drop
+    # every fragment under the threshold while Node still sees one line.
+    payload = ("x" * 2000 + "\x0c") * 3
+    assert max(len(l) for l in payload.splitlines()) < 3000
+    assert "heuristic:long-line" in rules(run_heuristics(payload, "eslint.config.js"))
+
+
+def test_unicode_line_separators_cannot_fragment_a_long_line():
+    for sep in (" ", " ", "\x0b", "\x1c", "\x1d", "\x1e", "\x85"):
+        payload = ("y" * 2000 + sep) * 3
+        assert "heuristic:long-line" in rules(run_heuristics(payload, "app.js")), repr(sep)
+
+
+def test_a_real_newline_still_separates_lines():
+    body = "x" * 2000 + "\n" + "x" * 2000 + "\n"
+    assert run_heuristics(body, "app.js") == []
+
+
+def test_heuristic_line_numbers_are_lf_based():
+    body = "short\rshort\rshort\n" + "z" * 4000 + "\n"
+    found = [f for f in run_heuristics(body, "app.js") if f.rule == "heuristic:long-line"]
+    assert found and found[0].line == 2, [f.line for f in found]

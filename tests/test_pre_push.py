@@ -33,6 +33,9 @@ def run_hook(repo, stdin, env=None):
     e = dict(os.environ)
     e["IOC_GUARD_ENGINE"] = str(REPO)
     e["IOC_GUARD_PYTHON"] = sys.executable
+    # Never let a test append to the real ~/.git-hooks/override.log: that file
+    # is an audit record of genuine overrides, and a test run is not one.
+    e["IOC_GUARD_LOG"] = str(pathlib.Path(repo).parent / "hook-override.log")
     e.update(env or {})
     return subprocess.run(["bash", str(HOOK), "origin", "https://example.com/r.git"],
                           cwd=str(repo), input=stdin, capture_output=True, text=True, env=e)
